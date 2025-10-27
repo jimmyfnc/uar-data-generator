@@ -181,8 +181,9 @@ const V3_COLUMN_NAMES = [
     'Tl Date',
     'Uar Source',
     'Unique Key',
-    'User Access Grouping',    
+    'User Access Grouping',
     'Completed Certifications',
+    'Total Certifications',
     'Data as of',
     'Due in Days',
     'Termination Request Datetime',
@@ -1061,6 +1062,7 @@ function transformRecordToV3(v2Record) {
     v3Record['User Access Grouping'] = getUserAccessGrouping(dueInDays);
     v3Record['Level 2'] = v2Record.LEVEL_2;
     v3Record['Completed Certifications'] = v2Record.COMPLETED_CERTIFICATIONS;
+    v3Record['Total Certifications'] = v2Record.TOTAL_CERTIFICATIONS;
     v3Record['Data as of'] = v2Record.CAMPAIGN_load_date; // Same as Campaign Load Date
     v3Record['Due in Days'] = dueInDays.toString();
     v3Record['Termination Request Datetime'] = v2Record.TERMINATION_REQUEST_DATETIME;
@@ -1069,6 +1071,47 @@ function transformRecordToV3(v2Record) {
     v3Record['Deprovision Compliance Status'] = v2Record.DEPROVISION_COMPLIANCE !== null ? formatBoolean(v2Record.DEPROVISION_COMPLIANCE) : '';
 
     return v3Record;
+}
+
+
+// Set IS_CURRENT flag: only the latest record per employee+campaign should be current
+function setIsCurrentFlags(records, logger) {
+    logger('🔄 Setting IS_CURRENT flags for latest records per employee+campaign...');
+    
+    // First, set all to false
+    records.forEach(r => r.IS_CURRENT = false);
+    
+    // Group records by employee+campaign
+    const grouped = {};
+    records.forEach(record => {
+        const key = `${record.EMPLOYEE_ID}_${record.CAMPAIGN_ID}`;
+        if (!grouped[key]) {
+            grouped[key] = [];
+        }
+        grouped[key].push(record);
+    });
+    
+    // For each group, find the latest record and mark it as current
+    let currentCount = 0;
+    Object.values(grouped).forEach(group => {
+        // Sort by certification start date (most recent first)
+        group.sort((a, b) => {
+            const dateA = new Date(a.CERTIFICATION_START_DATETIME);
+            const dateB = new Date(b.CERTIFICATION_START_DATETIME);
+            return dateB - dateA;
+        });
+        
+        // Mark the most recent as current (only if campaign is still active)
+        const latest = group[0];
+        if (latest.IS_ACTIVE_CAMPAIGN) {
+            latest.IS_CURRENT = true;
+            currentCount++;
+        }
+    });
+    
+    const historicalCount = records.length - currentCount;
+    logger('   ✅ Marked ' + currentCount.toLocaleString() + ' records as IS_CURRENT=TRUE (latest per employee+campaign)');
+    logger('   ✅ Marked ' + historicalCount.toLocaleString() + ' records as IS_CURRENT=FALSE (historical)');
 }
 
 function generateUARData(logger = console.log) {
@@ -1147,6 +1190,9 @@ function generateUARData(logger = console.log) {
         logger('🎯 Adjusting ODM deprovision compliance to target rate...');
         adjustDeprovisionComplianceToTarget(records, CONFIG.DEPROVISION_COMPLIANCE_RATE, rng, logger);
     }
+
+    // Set IS_CURRENT flags
+    setIsCurrentFlags(records, logger);
 
     return { records, employees, campaigns };
 }
