@@ -1124,6 +1124,27 @@ function transformRecordToV3(v2Record) {
     // Determine if past due (only for non-closed certifications)
     const isPastDue = (dueInDays < 0 && v2Record.CERTIFICATION_STATUS !== 'CLOSED');
 
+    // Recalculate Phase By SLA and Compliance Status based on current date (not generation date)
+    let phaseBySLA;
+    let complianceStatus;
+    
+    if (v2Record.CERTIFICATION_STATUS === 'CLOSED') {
+        // For closed certifications, check if completed on time
+        const certEndDate = v2Record.CERTIFICATION_END_DATETIME ? new Date(v2Record.CERTIFICATION_END_DATETIME) : null;
+        if (certEndDate) {
+            const completedOnTime = certEndDate <= dueDate;
+            phaseBySLA = completedOnTime ? 'Completed within SLA' : 'Completed past SLA';
+        } else {
+            phaseBySLA = 'Completed within SLA'; // No end date, assume on time
+        }
+        complianceStatus = 'Compliant'; // Closed records are always compliant
+    } else {
+        // For open certifications, check if past due date
+        const isOpenOnTime = now <= dueDate;
+        phaseBySLA = isOpenOnTime ? 'Open within SLA' : 'Open Past SLA';
+        complianceStatus = isOpenOnTime ? 'Compliant' : 'Not Compliant';
+    }
+
     // Create V3 record with correct column names and order
     const v3Record = {};
 
@@ -1142,7 +1163,7 @@ function transformRecordToV3(v2Record) {
     v3Record['Certification Name'] = v2Record.CERTIFICATION_NAME;
     v3Record['Certification Start Date'] = v2Record.CERTIFICATION_START_DATETIME;
     v3Record['Certification Status'] = v2Record.CERTIFICATION_STATUS;
-    v3Record['Compliance Status'] = formatBoolean(v2Record.COMPLIANCE_STATUS === 'Compliant');
+    v3Record['Compliance Status'] = formatBoolean(complianceStatus === 'Compliant');
     v3Record['Employee Email Address'] = v2Record.EMPLOYEE_EMAIL_ADDRESS;
     v3Record['Employee Id'] = v2Record.EMPLOYEE_ID;
     v3Record['Employee Job Title'] = v2Record.EMPLOYEE_JOB_TITLE;
@@ -1157,7 +1178,7 @@ function transformRecordToV3(v2Record) {
     v3Record['Manager Employee Id'] = v2Record.Manager_employee_id;
     v3Record['Manager Full Name'] = v2Record.MANAGER_FULL_NAME;
     v3Record['Past Due'] = isPastDue ? 'Past Due' : '';
-    v3Record['Phase By Sla'] = v2Record.PHASE_BY_SLA;
+    v3Record['Phase By Sla'] = phaseBySLA;
     v3Record['Reviewer Mail Id'] = v2Record.REVIEWER_MAIL_ID;
     v3Record['Reviewer Name'] = v2Record.REVIEWER_NAME;
     v3Record['Level 4'] = v2Record.LEVEL_4;
