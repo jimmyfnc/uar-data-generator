@@ -534,17 +534,119 @@ function getTLDate(date) {
     return `${month}/${day}/${year}`;
 }
 
-// Get organizational hierarchy for employee
-function getOrgHierarchy(rng) {
-    const level1 = SAMPLE_DATA.orgHierarchy.level1[0];
-    const level2 = randomFromArray(SAMPLE_DATA.orgHierarchy.level2, rng);
-    const level3 = randomFromArray(SAMPLE_DATA.orgHierarchy.level3, rng);
-    const level4 = randomFromArray(SAMPLE_DATA.orgHierarchy.level4, rng);
-    const level5 = randomFromArray(SAMPLE_DATA.orgHierarchy.level5, rng);
-    const level6 = rng.random() < 0.7 ? level5 : randomFromArray(SAMPLE_DATA.orgHierarchy.level5, rng);
+// Build hierarchical org structure with proper reporting relationships
+function buildOrgHierarchy() {
+    // Define the org hierarchy with explicit reporting relationships
+    const orgStructure = {
+        level1: { name: 'Jane Smith', children: [] }, // CEO
+        level2: [
+            { name: 'John Davis', parent: 'Jane Smith', children: [] },
+            { name: 'Sarah Johnson', parent: 'Jane Smith', children: [] },
+            { name: 'Michael Chen', parent: 'Jane Smith', children: [] }
+        ],
+        level3: [
+            { name: 'Robert Taylor', parent: 'John Davis', children: [] },
+            { name: 'Lisa Anderson', parent: 'John Davis', children: [] },
+            { name: 'David Martinez', parent: 'Sarah Johnson', children: [] },
+            { name: 'Emily White', parent: 'Sarah Johnson', children: [] },
+            { name: 'James Brown', parent: 'Michael Chen', children: [] }
+        ],
+        level4: [
+            { name: 'Christopher Lee', parent: 'Robert Taylor', children: [] },
+            { name: 'Jennifer Garcia', parent: 'Robert Taylor', children: [] },
+            { name: 'Matthew Wilson', parent: 'Lisa Anderson', children: [] },
+            { name: 'Amanda Rodriguez', parent: 'Lisa Anderson', children: [] },
+            { name: 'Daniel Lopez', parent: 'David Martinez', children: [] },
+            { name: 'Jessica Hernandez', parent: 'David Martinez', children: [] },
+            { name: 'William Thomas', parent: 'Emily White', children: [] },
+            { name: 'Michelle Moore', parent: 'James Brown', children: [] }
+        ],
+        level5: [
+            { name: 'Andrew Jackson', parent: 'Christopher Lee' },
+            { name: 'Stephanie Martin', parent: 'Christopher Lee' },
+            { name: 'Joshua Thompson', parent: 'Jennifer Garcia' },
+            { name: 'Nicole Harris', parent: 'Matthew Wilson' },
+            { name: 'Anthony Clark', parent: 'Amanda Rodriguez' },
+            { name: 'Elizabeth Lewis', parent: 'Daniel Lopez' },
+            { name: 'Mark Robinson', parent: 'Jessica Hernandez' },
+            { name: 'Helen Walker', parent: 'William Thomas' }
+        ]
+    };
+
+    // Build lookup maps for quick access
+    const level2Map = {};
+    const level3Map = {};
+    const level4Map = {};
+    const level5Map = {};
     
-    return { level1, level2, level3, level4, level5, level6, manager: level6 };
+    orgStructure.level2.forEach(l2 => {
+        level2Map[l2.name] = l2;
+        orgStructure.level1.children.push(l2.name);
+    });
+    
+    orgStructure.level3.forEach(l3 => {
+        level3Map[l3.name] = l3;
+        if (level2Map[l3.parent]) {
+            level2Map[l3.parent].children.push(l3.name);
+        }
+    });
+    
+    orgStructure.level4.forEach(l4 => {
+        level4Map[l4.name] = l4;
+        if (level3Map[l4.parent]) {
+            level3Map[l4.parent].children.push(l4.name);
+        }
+    });
+    
+    orgStructure.level5.forEach(l5 => {
+        level5Map[l5.name] = l5;
+        if (level4Map[l5.parent]) {
+            level4Map[l5.parent].children = level4Map[l5.parent].children || [];
+            level4Map[l5.parent].children.push(l5.name);
+        }
+    });
+    
+    return {
+        structure: orgStructure,
+        maps: { level2Map, level3Map, level4Map, level5Map }
+    };
 }
+
+// Get organizational hierarchy for employee with proper reporting structure
+function getOrgHierarchy(rng, orgHierarchyData) {
+    const { structure, maps } = orgHierarchyData;
+    
+    // Start from bottom: randomly pick a Level 5 (manager)
+    const level5Person = randomFromArray(structure.level5, rng);
+    const level5 = level5Person.name;
+    const level6 = level5; // Level 6 is same as Level 5 (employee reports to this manager)
+    
+    // Walk up the hierarchy to find Level 4
+    const level4Person = maps.level4Map[level5Person.parent];
+    const level4 = level4Person.name;
+    
+    // Walk up to find Level 3
+    const level3Person = maps.level3Map[level4Person.parent];
+    const level3 = level3Person.name;
+    
+    // Walk up to find Level 2
+    const level2Person = maps.level2Map[level3Person.parent];
+    const level2 = level2Person.name;
+    
+    // Level 1 is always the CEO
+    const level1 = structure.level1.name;
+    
+    return { 
+        level1, 
+        level2, 
+        level3, 
+        level4, 
+        level5, 
+        level6, 
+        manager: level6 
+    };
+}
+
 
 // Calculate seasonal trend factor based on date (0.0 to 1.0 scale)
 // Returns higher values during peak compliance season, lower during holiday season
@@ -698,11 +800,14 @@ function generateTerminationTimestamps(baseDate, campaignType, rng) {
 function createEmployeePool(employeeCount, rng) {
     const employees = [];
     
+    // Build the hierarchical org structure
+    const orgHierarchyData = buildOrgHierarchy();
+    
     for (let i = 0; i < employeeCount; i++) {
         const firstName = randomFromArray(SAMPLE_DATA.firstNames, rng);
         const lastName = randomFromArray(SAMPLE_DATA.lastNames, rng);
         const empId = generateEmployeeId();
-        const orgHierarchy = getOrgHierarchy(rng);
+        const orgHierarchy = getOrgHierarchy(rng, orgHierarchyData);
         const jobTitle = randomFromArray(SAMPLE_DATA.jobTitles, rng);
         
         // Generate manager info
