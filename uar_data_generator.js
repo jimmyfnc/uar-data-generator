@@ -35,6 +35,7 @@
 // Import required modules
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // Add configuration option for summary-only mode
 const CONFIG = {
@@ -517,16 +518,10 @@ function generateCampaignId(rng) {
     return result;
 }
 
-// Generate Unique ID hash
+// Generate Unique ID hash (MD5)
 function generateUniqueId(campaignName, certificationName, certificationId, campaignId, employeeId, employeeName, employeeEmail) {
     const str = `${campaignName}${certificationName}${certificationId}${campaignId}${employeeId}${employeeName}${employeeEmail}`;
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-        const char = str.charCodeAt(i);
-        hash = ((hash << 5) - hash) + char;
-        hash = hash & hash;
-    }
-    return Math.abs(hash).toString(16).toUpperCase().padStart(16, '0');
+    return crypto.createHash('md5').update(str).digest('hex').toUpperCase();
 }
 
 // Get trendline date (first day of month)
