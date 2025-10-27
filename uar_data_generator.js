@@ -1029,7 +1029,7 @@ function generateUARRecord(campaign, employees, rng) {
     
     // Calculate derived fields
     const certificationCompleted = status === 'CLOSED';
-    const tlDate = getTLDate(certLoadDate);
+    const tlDate = getTLDate(certStartDate);
     
     // Calculate Phase by SLA
     let phaseBySLA;
