@@ -106,20 +106,20 @@ const CONFIG = {
     // Monthly Trendline Weights (optional) - Custom compliance multipliers per month
     // Set to null to use automatic sinusoidal pattern, or provide array of 12 values (Jan-Dec)
     // Values > 1.0 = higher compliance, < 1.0 = lower compliance
-    // Pattern: High compliance after audits (Q1), dips in summer and holidays
+    // Target: 93% base rate with variation between 90-95% (multipliers: 0.968 to 1.022)
     MONTHLY_COMPLIANCE_WEIGHTS: [
-        1.08,  // Jan - Post-holiday catch-up, new year focus
-        1.12,  // Feb - Pre-audit preparation
-        1.15,  // Mar - Peak audit season compliance
-        1.10,  // Apr - Post-audit momentum
-        1.02,  // May - Normal operations
-        0.95,  // Jun - Summer vacation season begins
-        0.88,  // Jul - Mid-summer, vacation peak
-        0.92,  // Aug - Late summer, back-to-work prep
-        1.00,  // Sep - Back to normal operations
-        1.05,  // Oct - Q4 push, year-end prep
-        0.98,  // Nov - Thanksgiving disruption
-        0.82   // Dec - Holiday season low
+        0.989,  // Jan - ~92% (post-holiday)
+        1.011,  // Feb - ~94% (pre-audit prep)
+        1.022,  // Mar - ~95% (peak audit season)
+        1.000,  // Apr - ~93% (normal operations)
+        0.989,  // May - ~92% (spring lull)
+        0.968,  // Jun - ~90% (summer begins)
+        0.968,  // Jul - ~90% (summer vacation peak)
+        0.978,  // Aug - ~91% (back-to-work prep)
+        0.989,  // Sep - ~92% (normal operations resume)
+        1.000,  // Oct - ~93% (Q4 push - CURRENT MONTH TARGET)
+        0.978,  // Nov - ~91% (Thanksgiving disruption)
+        0.968   // Dec - ~90% (holiday season)
     ],
     
     // Monthly Deprovisioning Speed Weights (optional) - Custom speed multipliers per month
@@ -1014,33 +1014,84 @@ function generateUARRecord(campaign, employees, rng) {
     // Add some randomness (+/- 3 days) to make it realistic
     const slaVariance = rng.randomInt(-3, 3);
     slaDays = Math.max(CONFIG.CERT_SLA_DAYS_MIN, Math.min(CONFIG.CERT_SLA_DAYS_MAX, slaDays + slaVariance));
-    
-    const certDueDate = new Date(certStartDate.getTime() + (slaDays * 24 * 60 * 60 * 1000));
+
+    // Apply monthly compliance targeting
+    // Get the month index (0-11) from certification start date
+    const certMonth = certStartDate.getMonth();
+    const monthlyComplianceWeight = CONFIG.MONTHLY_COMPLIANCE_WEIGHTS[certMonth];
+    const targetComplianceRate = CONFIG.COMPLIANCE_RATE * monthlyComplianceWeight;
+
+    // Determine if this certification should be compliant based on monthly target
+    const shouldBeCompliant = rng.random() < targetComplianceRate;
+
+    // Calculate initial due date
+    let certDueDate = new Date(certStartDate.getTime() + (slaDays * 24 * 60 * 60 * 1000));
+    let adjustedEndDate = certEndDate;
+
+    if (status === 'CLOSED') {
+        // For closed certifications, adjust end date to meet compliance target
+        if (shouldBeCompliant) {
+            // Ensure completed within SLA: end date <= due date
+            if (adjustedEndDate && adjustedEndDate > certDueDate) {
+                // Complete before due date
+                const daysBeforeDue = rng.randomInt(1, Math.max(1, Math.min(5, slaDays)));
+                adjustedEndDate = new Date(certDueDate.getTime() - (daysBeforeDue * 24 * 60 * 60 * 1000));
+            }
+        } else {
+            // Ensure completed past SLA: end date > due date
+            if (adjustedEndDate && adjustedEndDate <= certDueDate) {
+                // Complete after due date
+                const daysAfterDue = rng.randomInt(1, 7);
+                adjustedEndDate = new Date(certDueDate.getTime() + (daysAfterDue * 24 * 60 * 60 * 1000));
+            }
+        }
+    } else {
+        // For open certifications, adjust due date to control current compliance
+        // Check if cert would be past due as of NOW
+        if (shouldBeCompliant) {
+            // Keep due date in future (or ensure it is)
+            const daysSinceStart = (now.getTime() - certStartDate.getTime()) / (24 * 60 * 60 * 1000);
+            if (daysSinceStart >= slaDays) {
+                // Certification would naturally be past due, extend due date
+                certDueDate = new Date(now.getTime() + rng.randomInt(1, 30) * 24 * 60 * 60 * 1000);
+            }
+            // else: due date is naturally in future, keep it
+        } else {
+            // Force due date to be in the past (make it past due NOW)
+            const daysSinceStart = (now.getTime() - certStartDate.getTime()) / (24 * 60 * 60 * 1000);
+            if (certDueDate > now) {
+                // Due date is in future, move it to past
+                certDueDate = new Date(now.getTime() - rng.randomInt(1, Math.max(1, Math.floor(daysSinceStart/2))) * 24 * 60 * 60 * 1000);
+            }
+            // else: already past due, keep it
+        }
+    }
+
     const certLoadDate = rng.randomDate(campaign.loadDate, campaign.startDate);
-    
+
     // Generate source
     const source = randomFromArray(SAMPLE_DATA.sources, rng);
-    
+
     // Generate termination tracking data (for Gartner ODM)
     const terminationData = generateTerminationTimestamps(certLoadDate, campaign.type, rng);
-    
+
     // Generate certification ID
     const certificationId = generateCertificationId(rng);
-    
+
     // Calculate derived fields
     const certificationCompleted = status === 'CLOSED';
     const tlDate = getTLDate(certStartDate);
-    
-    // Calculate Phase by SLA
+
+    // Calculate Phase by SLA (will be recalculated in transformRecordToV3, but set here for consistency)
     let phaseBySLA;
     if (status === 'CLOSED') {
-        const completedOnTime = certEndDate <= certDueDate;
+        const completedOnTime = adjustedEndDate <= certDueDate;
         phaseBySLA = completedOnTime ? 'Completed within SLA' : 'Completed past SLA';
     } else {
-        const isOpenOnTime = new Date() <= certDueDate;
+        const isOpenOnTime = now <= certDueDate;
         phaseBySLA = isOpenOnTime ? 'Open within SLA' : 'Open Past SLA';
     }
-    
+
     // Compliance status
     const complianceStatus = phaseBySLA === 'Open Past SLA' ? 'Not Compliant' : 'Compliant';
     
@@ -1072,7 +1123,7 @@ function generateUARRecord(campaign, employees, rng) {
         CERTIFICATION_ID: certificationId,
         CERTIFICATION_NAME: certificationName,
         CERTIFICATION_START_DATETIME: formatDateTime(certStartDate),
-        CERTIFICATION_END_DATETIME: certEndDate ? formatDateTime(certEndDate) : '',
+        CERTIFICATION_END_DATETIME: adjustedEndDate ? formatDateTime(adjustedEndDate) : '',
         CERTIFICATION_DUE_DATETIME: formatDateTime(certDueDate),
         CERTIFICATION_LOAD_DATE: formatDateTime(certLoadDate),
         TOTAL_CERTIFICATIONS: totalCertifications.toString(),
@@ -1134,16 +1185,18 @@ function transformRecordToV3(v2Record) {
         if (certEndDate) {
             const completedOnTime = certEndDate <= dueDate;
             phaseBySLA = completedOnTime ? 'Completed within SLA' : 'Completed past SLA';
+            complianceStatus = completedOnTime ? 'Compliant' : 'Not Compliant'; // Closed records compliant only if completed within SLA
         } else {
             phaseBySLA = 'Completed within SLA'; // No end date, assume on time
+            complianceStatus = 'Compliant'; // No end date,assume compliant
         }
-        complianceStatus = 'Compliant'; // Closed records are always compliant
     } else {
         // For open certifications, check if past due date
         const isOpenOnTime = now <= dueDate;
         phaseBySLA = isOpenOnTime ? 'Open within SLA' : 'Open Past SLA';
         complianceStatus = isOpenOnTime ? 'Compliant' : 'Not Compliant';
     }
+
 
     // Create V3 record with correct column names and order
     const v3Record = {};
@@ -1307,9 +1360,9 @@ function generateUARData(logger = console.log) {
         [records[i], records[j]] = [records[j], records[i]];
     }
     
-    // POST-GENERATION COMPLIANCE ADJUSTMENT
-    logger('🎯 Adjusting records to achieve target compliance rate...');
-    adjustComplianceToTarget(records, CONFIG.COMPLIANCE_RATE, rng, logger);
+    // POST-GENERATION COMPLIANCE ADJUSTMENT (DISABLED - using monthly targeting instead)
+    // logger('🎯 Adjusting records to achieve target compliance rate...');
+    // adjustComplianceToTarget(records, CONFIG.COMPLIANCE_RATE, rng, logger);
 
     // Adjust ODM deprovision compliance if enabled
     if (CONFIG.TERMINATION_TRACKING_ENABLED) {
