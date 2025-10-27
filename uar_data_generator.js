@@ -1190,26 +1190,32 @@ function transformRecordToV3(v2Record) {
     // Determine if past due (only for non-closed certifications)
     const isPastDue = (dueInDays < 0 && v2Record.CERTIFICATION_STATUS !== 'CLOSED');
 
-    // Recalculate Phase By SLA and Compliance Status based on current date (not generation date)
+    // For IS_CURRENT records, preserve the adjusted compliance status
+    // For other records, recalculate based on current date
     let phaseBySLA;
     let complianceStatus;
     
-    if (v2Record.CERTIFICATION_STATUS === 'CLOSED') {
-        // For closed certifications, check if completed on time
-        const certEndDate = v2Record.CERTIFICATION_END_DATETIME ? new Date(v2Record.CERTIFICATION_END_DATETIME) : null;
-        if (certEndDate) {
-            const completedOnTime = certEndDate <= dueDate;
-            phaseBySLA = completedOnTime ? 'Completed within SLA' : 'Completed past SLA';
-            complianceStatus = completedOnTime ? 'Compliant' : 'Not Compliant'; // Closed records compliant only if completed within SLA
-        } else {
-            phaseBySLA = 'Completed within SLA'; // No end date, assume on time
-            complianceStatus = 'Compliant'; // No end date,assume compliant
-        }
+    if (v2Record.IS_CURRENT) {
+        // Preserve adjusted compliance for IS_CURRENT records
+        phaseBySLA = v2Record.PHASE_BY_SLA;
+        complianceStatus = v2Record.COMPLIANCE_STATUS;
     } else {
-        // For open certifications, check if past due date
-        const isOpenOnTime = now <= dueDate;
-        phaseBySLA = isOpenOnTime ? 'Open within SLA' : 'Open Past SLA';
-        complianceStatus = isOpenOnTime ? 'Compliant' : 'Not Compliant';
+        // Recalculate for historical records based on current date
+        if (v2Record.CERTIFICATION_STATUS === 'CLOSED') {
+            const certEndDate = v2Record.CERTIFICATION_END_DATETIME ? new Date(v2Record.CERTIFICATION_END_DATETIME) : null;
+            if (certEndDate) {
+                const completedOnTime = certEndDate <= dueDate;
+                phaseBySLA = completedOnTime ? 'Completed within SLA' : 'Completed past SLA';
+                complianceStatus = completedOnTime ? 'Compliant' : 'Not Compliant';
+            } else {
+                phaseBySLA = 'Completed within SLA';
+                complianceStatus = 'Compliant';
+            }
+        } else {
+            const isOpenOnTime = now <= dueDate;
+            phaseBySLA = isOpenOnTime ? 'Open within SLA' : 'Open Past SLA';
+            complianceStatus = isOpenOnTime ? 'Compliant' : 'Not Compliant';
+        }
     }
 
 
@@ -1388,6 +1394,9 @@ function generateUARData(logger = console.log) {
     // Set IS_CURRENT flags
     setIsCurrentFlags(records, logger);
 
+    // Adjust IS_CURRENT records to hit target compliance for current month
+    adjustCurrentMonthCompliance(records, CONFIG.COMPLIANCE_RATE, rng, logger);
+
     return { records, employees, campaigns };
 }
 
@@ -1475,6 +1484,85 @@ function adjustComplianceToTarget(records, targetRate, rng, logger) {
 }
 
 // Post-generation ODM deprovision compliance adjustment function
+// Adjust IS_CURRENT records for current month to hit target compliance
+function adjustCurrentMonthCompliance(records, targetRate, rng, logger) {
+    logger('🎯 Adjusting IS_CURRENT (current month) records to target compliance...');
+    
+    // Get current month (October 2025 = month 9, 0-indexed)
+    const now = new Date();
+    const currentMonth = now.getMonth(); // 9 for October
+    const currentYear = now.getFullYear(); // 2025
+    
+    // Filter to IS_CURRENT records only
+    const currentRecords = records.filter(r => r.IS_CURRENT === true);
+    
+    if (currentRecords.length === 0) {
+        logger('   ⚠️  No IS_CURRENT records found');
+        return;
+    }
+    
+    // Calculate current compliance for IS_CURRENT records
+    const currentCompliant = currentRecords.filter(r => r.COMPLIANCE_STATUS === 'Compliant').length;
+    const currentRate = currentCompliant / currentRecords.length;
+    
+    const targetCompliant = Math.round(currentRecords.length * targetRate);
+    const adjustment = targetCompliant - currentCompliant;
+    
+    logger(`   Current month (IS_CURRENT) compliance: ${currentCompliant.toLocaleString()}/${currentRecords.length.toLocaleString()} (${(currentRate * 100).toFixed(2)}%)`);
+    logger(`   Target compliance: ${targetCompliant.toLocaleString()}/${currentRecords.length.toLocaleString()} (${(targetRate * 100).toFixed(2)}%)`);
+    logger(`   Adjustment needed: ${adjustment > 0 ? '+' : ''}${adjustment} records`);
+    
+    if (adjustment === 0) {
+        logger('   ✅ Already at target compliance rate!');
+        return;
+    }
+    
+    if (adjustment > 0) {
+        // Need to make more IS_CURRENT records compliant
+        const nonCompliantRecords = currentRecords.filter(r => r.COMPLIANCE_STATUS === 'Not Compliant');
+        
+        if (nonCompliantRecords.length === 0) {
+            logger('   ⚠️  No non-compliant IS_CURRENT records to adjust');
+            return;
+        }
+        
+        const toAdjust = Math.min(adjustment, nonCompliantRecords.length);
+        const shuffled = [...nonCompliantRecords].sort(() => rng.random() - 0.5);
+        
+        for (let i = 0; i < toAdjust; i++) {
+            shuffled[i].COMPLIANCE_STATUS = 'Compliant';
+            shuffled[i].PHASE_BY_SLA = shuffled[i].CERTIFICATION_STATUS === 'CLOSED' 
+                ? 'Completed within SLA' 
+                : 'Open within SLA';
+        }
+        
+        logger(`   ✅ Adjusted ${toAdjust} IS_CURRENT records from Non-Compliant to Compliant`);
+    } else {
+        // Need to make fewer IS_CURRENT records compliant (make some non-compliant)
+        const compliantRecords = currentRecords.filter(r => r.COMPLIANCE_STATUS === 'Compliant' && r.CERTIFICATION_STATUS !== 'CLOSED');
+        
+        if (compliantRecords.length === 0) {
+            logger('   ⚠️  No compliant open IS_CURRENT records to adjust');
+            return;
+        }
+        
+        const toAdjust = Math.min(Math.abs(adjustment), compliantRecords.length);
+        const shuffled = [...compliantRecords].sort(() => rng.random() - 0.5);
+        
+        for (let i = 0; i < toAdjust; i++) {
+            shuffled[i].COMPLIANCE_STATUS = 'Not Compliant';
+            shuffled[i].PHASE_BY_SLA = 'Open Past SLA';
+        }
+        
+        logger(`   ✅ Adjusted ${toAdjust} IS_CURRENT records from Compliant to Non-Compliant`);
+    }
+    
+    // Verify final compliance
+    const finalCompliant = currentRecords.filter(r => r.COMPLIANCE_STATUS === 'Compliant').length;
+    const finalRate = finalCompliant / currentRecords.length;
+    logger(`   🎯 Final IS_CURRENT compliance: ${finalCompliant.toLocaleString()}/${currentRecords.length.toLocaleString()} (${(finalRate * 100).toFixed(2)}%)`);
+}
+
 function adjustDeprovisionComplianceToTarget(records, targetRate, rng, logger) {
     // Filter only records with termination data
     const terminationRecords = records.filter(r => r.DEPROVISION_COMPLIANCE !== null);
