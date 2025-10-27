@@ -110,16 +110,16 @@ const CONFIG = {
     MONTHLY_COMPLIANCE_WEIGHTS: [
         0.989,  // Jan - ~92% (post-holiday)
         1.011,  // Feb - ~94% (pre-audit prep)
-        1.022,  // Mar - ~95% (peak audit season)
+        1.032,  // Mar - ~96% (peak audit season)
         1.000,  // Apr - ~93% (normal operations)
-        0.989,  // May - ~92% (spring lull)
-        0.968,  // Jun - ~90% (summer begins)
-        0.968,  // Jul - ~90% (summer vacation peak)
-        0.978,  // Aug - ~91% (back-to-work prep)
+        0.957,  // May - ~89% (spring lull, end of fiscal year rush fades)
+        0.946,  // Jun - ~88% (summer vacation begins)
+        0.946,  // Jul - ~88% (summer vacation peak)
+        0.968,  // Aug - ~90% (back-to-work prep)
         0.989,  // Sep - ~92% (normal operations resume)
         1.000,  // Oct - ~93% (Q4 push - CURRENT MONTH TARGET)
         0.978,  // Nov - ~91% (Thanksgiving disruption)
-        0.968   // Dec - ~90% (holiday season)
+        0.946   // Dec - ~88% (holiday season)
     ],
     
     // Monthly Deprovisioning Speed Weights (optional) - Custom speed multipliers per month
@@ -1047,8 +1047,23 @@ function generateUARRecord(campaign, employees, rng) {
         }
     } else {
         // For open certifications, adjust due date to control current compliance
+        // SPECIAL HANDLING: For ACTIVE campaigns (which become IS_CURRENT=TRUE), 
+        // be more aggressive about making certs past due to ensure realistic past due distribution
+        const isActiveCampaign = campaign.status === 'ACTIVE';
+        const currentMonthBoost = (certMonth === 9) ? 1.0 : 0.0; // Oct = month 9 (0-indexed), current month
+        
         // Check if cert would be past due as of NOW
-        if (shouldBeCompliant) {
+        // For ACTIVE campaigns, reduce compliance target to ensure more past due records
+        let adjustedCompliance = shouldBeCompliant;
+        if (isActiveCampaign) {
+            // Reduce compliance by 5-10% for active campaigns to create more past due
+            const activeCampaignReduction = 0.12; // 12% reduction - more past due for current month
+            if (rng.random() < activeCampaignReduction) {
+                adjustedCompliance = false; // Force this cert to be past due
+            }
+        }
+        
+        if (adjustedCompliance) {
             // Keep due date in future (or ensure it is)
             const daysSinceStart = (now.getTime() - certStartDate.getTime()) / (24 * 60 * 60 * 1000);
             if (daysSinceStart >= slaDays) {
